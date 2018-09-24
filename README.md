@@ -1,5 +1,3 @@
-#google-cloud-poc
-#Created by Dikshith
 
 This is a simple script to create [Google Cloud Dataproc](https://cloud.google.com/dataproc) cluster with [Cloud Data Lab](https://cloud.google.com/datalab/).
 
