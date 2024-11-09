@@ -1,0 +1,163 @@
+from kfp import dsl, compiler
+from google.cloud import storage
+from google.cloud import aiplatform
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+import joblib
+
+# Component 1: Data preprocessing
+@dsl.component
+def preprocess_data(
+    project_id: str,
+    bucket_name: str,
+    data_path: str,
+    output_path: str
+):
+    """Preprocess the data and split into train/test sets."""
+    # Read data from GCS
+    storage_client = storage.Client(project=project_id)
+    bucket = storage_client.get_bucket(bucket_name)
+    blob = bucket.blob(data_path)
+    
+    # Download to local
+    blob.download_to_filename('raw_data.csv')
+    df = pd.read_csv('raw_data.csv')
+    
+    # Basic preprocessing
+    # Assuming we have numerical features and a binary target
+    X = df.drop('target', axis=1)
+    y = df['target']
+    
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+    
+    # Save processed data
+    train_data = pd.concat([X_train, y_train], axis=1)
+    test_data = pd.concat([X_test, y_test], axis=1)
+    
+    train_data.to_csv('train.csv', index=False)
+    test_data.to_csv('test.csv', index=False)
+    
+    # Upload to GCS
+    train_blob = bucket.blob(f"{output_path}/train.csv")
+    test_blob = bucket.blob(f"{output_path}/test.csv")
+    
+    train_blob.upload_from_filename('train.csv')
+    test_blob.upload_from_filename('test.csv')
+    
+    return {
+        'train_path': f"{output_path}/train.csv",
+        'test_path': f"{output_path}/test.csv"
+    }
+
+# Component 2: Model training
+@dsl.component
+def train_model(
+    project_id: str,
+    bucket_name: str,
+    train_data_path: str,
+    model_output_path: str
+):
+    """Train a Random Forest model."""
+    # Get training data
+    storage_client = storage.Client(project=project_id)
+    bucket = storage_client.get_bucket(bucket_name)
+    blob = bucket.blob(train_data_path)
+    blob.download_to_filename('train.csv')
+    
+    # Load and prepare data
+    train_data = pd.read_csv('train.csv')
+    X_train = train_data.drop('target', axis=1)
+    y_train = train_data['target']
+    
+    # Train model
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    
+    # Save model
+    joblib.dump(model, 'model.joblib')
+    
+    # Upload model to GCS
+    model_blob = bucket.blob(f"{model_output_path}/model.joblib")
+    model_blob.upload_from_filename('model.joblib')
+    
+    return {'model_path': f"{model_output_path}/model.joblib"}
+
+# Component 3: Model evaluation
+@dsl.component
+def evaluate_model(
+    project_id: str,
+    bucket_name: str,
+    test_data_path: str,
+    model_path: str
+):
+    """Evaluate the trained model."""
+    storage_client = storage.Client(project=project_id)
+    bucket = storage_client.get_bucket(bucket_name)
+    
+    # Download test data and model
+    test_blob = bucket.blob(test_data_path)
+    model_blob = bucket.blob(model_path)
+    
+    test_blob.download_to_filename('test.csv')
+    model_blob.download_to_filename('model.joblib')
+    
+    # Load test data and model
+    test_data = pd.read_csv('test.csv')
+    X_test = test_data.drop('target', axis=1)
+    y_test = test_data['target']
+    
+    model = joblib.load('model.joblib')
+    
+    # Make predictions and calculate accuracy
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    
+    print(f"Model accuracy: {accuracy:.4f}")
+    return {'accuracy': float(accuracy)}
+
+# Define the pipeline
+@dsl.pipeline(
+    name='Simple ML Pipeline',
+    description='A simple ML pipeline example'
+)
+def ml_pipeline(
+    project_id: str,
+    bucket_name: str,
+    initial_data_path: str,
+    processed_data_path: str,
+    model_path: str
+):
+    # Run preprocessing
+    preprocess_op = preprocess_data(
+        project_id=project_id,
+        bucket_name=bucket_name,
+        data_path=initial_data_path,
+        output_path=processed_data_path
+    )
+    
+    # Train model
+    train_op = train_model(
+        project_id=project_id,
+        bucket_name=bucket_name,
+        train_data_path=preprocess_op.outputs['train_path'],
+        model_output_path=model_path
+    )
+    
+    # Evaluate model
+    evaluate_op = evaluate_model(
+        project_id=project_id,
+        bucket_name=bucket_name,
+        test_data_path=preprocess_op.outputs['test_path'],
+        model_path=train_op.outputs['model_path']
+    )
+
+# Compile the pipeline
+compiler.Compiler().compile(
+    pipeline_func=ml_pipeline,
+    package_path='ml_pipeline.yaml'
+)
