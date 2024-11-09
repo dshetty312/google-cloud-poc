@@ -1,0 +1,62 @@
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+
+# Set random seed for reproducibility
+np.random.seed(42)
+
+# Generate synthetic data
+n_samples = 1000
+
+# Generate features
+data = {
+    'age': np.random.normal(45, 15, n_samples).clip(18, 90),
+    'tenure_months': np.random.randint(1, 72, n_samples),
+    'monthly_charges': np.random.normal(70, 30, n_samples).clip(20, 200),
+    'total_charges': np.random.normal(2000, 1000, n_samples).clip(0, 8000),
+    'number_of_products': np.random.randint(1, 5, n_samples),
+    'has_internet_service': np.random.choice([0, 1], n_samples, p=[0.3, 0.7]),
+    'has_phone_service': np.random.choice([0, 1], n_samples, p=[0.1, 0.9]),
+    'has_online_security': np.random.choice([0, 1], n_samples, p=[0.6, 0.4]),
+    'has_tech_support': np.random.choice([0, 1], n_samples, p=[0.5, 0.5]),
+    'is_senior_citizen': np.random.choice([0, 1], n_samples, p=[0.85, 0.15])
+}
+
+# Create DataFrame
+df = pd.DataFrame(data)
+
+# Create target variable (churn) based on feature relationships
+def create_target(row):
+    churn_probability = 0.1  # base probability
+    
+    # Increase churn probability based on various factors
+    if row['tenure_months'] < 12:
+        churn_probability += 0.2
+    if row['monthly_charges'] > 100:
+        churn_probability += 0.15
+    if row['has_internet_service'] == 1 and row['has_online_security'] == 0:
+        churn_probability += 0.1
+    if row['has_tech_support'] == 0:
+        churn_probability += 0.1
+    if row['number_of_products'] == 1:
+        churn_probability += 0.1
+        
+    return np.random.choice([0, 1], p=[1-churn_probability, churn_probability])
+
+# Add target variable
+df['target'] = df.apply(create_target, axis=1)
+
+# Scale numerical features
+scaler = StandardScaler()
+numerical_cols = ['age', 'tenure_months', 'monthly_charges', 'total_charges']
+df[numerical_cols] = scaler.fit_transform(df[numerical_cols])
+
+# Save to CSV
+df.to_csv('raw_data.csv', index=False)
+
+# Print dataset information
+print("Dataset Shape:", df.shape)
+print("\nFeature Summary:")
+print(df.describe())
+print("\nTarget Distribution:")
+print(df['target'].value_counts(normalize=True))
