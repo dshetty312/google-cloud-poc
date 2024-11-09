@@ -1,0 +1,30 @@
+from google.cloud import aiplatform
+
+# Initialize Vertex AI
+aiplatform.init(project='your-project-id', location='your-location')
+
+# Define model parameters (optional)
+model_params = {
+    'n_estimators': 100,
+    'max_depth': 10,
+    'min_samples_split': 2,
+    'random_state': 42
+}
+
+# Create pipeline job
+job = aiplatform.PipelineJob(
+    display_name='Enhanced ML Pipeline Job',
+    template_path='enhanced_ml_pipeline.yaml',
+    pipeline_root='gs://your-bucket-name/pipeline_root',
+    parameter_values={
+        'project_id': 'your-project-id',
+        'bucket_name': 'your-bucket-name',
+        'initial_data_path': 'data/your_data.csv',
+        'processed_data_path': 'processed_data',
+        'model_path': 'models',
+        'n_splits': 5,
+        'model_params': model_params
+    }
+)
+
+job.run()
