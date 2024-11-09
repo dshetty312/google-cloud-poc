@@ -161,3 +161,25 @@ compiler.Compiler().compile(
     pipeline_func=ml_pipeline,
     package_path='ml_pipeline.yaml'
 )
+
+##########run the pipeline
+from google.cloud import aiplatform
+
+# Initialize Vertex AI
+aiplatform.init(project='your-project-id', location='your-location')
+
+# Create a pipeline job
+job = aiplatform.PipelineJob(
+    display_name='ML Pipeline Job',
+    template_path='ml_pipeline.yaml',
+    pipeline_root='gs://your-bucket-name/pipeline_root',
+    parameter_values={
+        'project_id': 'your-project-id',
+        'bucket_name': 'your-bucket-name',
+        'initial_data_path': 'data/your_data.csv',
+        'processed_data_path': 'processed_data',
+        'model_path': 'models'
+    }
+)
+
+job.run()
