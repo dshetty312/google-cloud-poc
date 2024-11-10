@@ -1,0 +1,236 @@
+# local_rf_pipeline.py
+
+import kfp
+from kfp import dsl
+from kfp.local import LocalClient
+from kfp.v2 import compiler
+from kfp.v2.dsl import (
+    component,
+    Input,
+    Output,
+    Dataset,
+    Model,
+    Metrics
+)
+import os
+import tempfile
+
+# Define components
+@component(
+    packages_to_install=['pandas', 'scikit-learn', 'numpy'],
+    base_image='python:3.9'
+)
+def load_data(data_output: Output[Dataset]):
+    """Load iris dataset and save it."""
+    from sklearn.datasets import load_iris
+    import pandas as pd
+    import numpy as np
+    
+    # Load iris dataset
+    iris = load_iris()
+    data = pd.DataFrame(
+        data=np.c_[iris['data'], iris['target']],
+        columns=[*iris['feature_names'], 'target']
+    )
+    
+    # Save data
+    data.to_csv(data_output.path, index=False)
+    print(f"Data saved to: {data_output.path}")
+    print(f"Data shape: {data.shape}")
+
+@component(
+    packages_to_install=['pandas', 'scikit-learn', 'numpy'],
+    base_image='python:3.9'
+)
+def preprocess_data(
+    data_input: Input[Dataset],
+    train_output: Output[Dataset],
+    test_output: Output[Dataset],
+    metrics_output: Output[Metrics]
+):
+    """Split data into train and test sets."""
+    import pandas as pd
+    from sklearn.model_selection import train_test_split
+    
+    # Load data
+    data = pd.read_csv(data_input.path)
+    
+    # Split features and target
+    X = data.drop('target', axis=1)
+    y = data['target']
+    
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+    
+    # Save train data
+    train_data = pd.concat([X_train, y_train], axis=1)
+    train_data.to_csv(train_output.path, index=False)
+    
+    # Save test data
+    test_data = pd.concat([X_test, y_test], axis=1)
+    test_data.to_csv(test_output.path, index=False)
+    
+    # Log metrics
+    metrics = {
+        'train_samples': len(train_data),
+        'test_samples': len(test_data)
+    }
+    metrics_output.log_metrics(metrics)
+    
+    print(f"Train shape: {train_data.shape}")
+    print(f"Test shape: {test_data.shape}")
+
+@component(
+    packages_to_install=['pandas', 'scikit-learn', 'numpy'],
+    base_image='python:3.9'
+)
+def train_model(
+    train_input: Input[Dataset],
+    model_output: Output[Model],
+    metrics_output: Output[Metrics]
+):
+    """Train Random Forest model."""
+    import pandas as pd
+    import pickle
+    from sklearn.ensemble import RandomForestClassifier
+    
+    # Load training data
+    train_data = pd.read_csv(train_input.path)
+    X_train = train_data.drop('target', axis=1)
+    y_train = train_data['target']
+    
+    # Train model
+    rf = RandomForestClassifier(
+        n_estimators=100,
+        max_depth=5,
+        random_state=42
+    )
+    rf.fit(X_train, y_train)
+    
+    # Save model
+    with open(model_output.path, 'wb') as f:
+        pickle.dump(rf, f)
+    
+    # Log metrics
+    metrics = {
+        'train_accuracy': float(rf.score(X_train, y_train)),
+        'feature_importance': {
+            name: float(importance)
+            for name, importance in zip(X_train.columns, rf.feature_importances_)
+        }
+    }
+    metrics_output.log_metrics(metrics)
+    
+    print(f"Model saved to: {model_output.path}")
+    print(f"Training accuracy: {metrics['train_accuracy']:.4f}")
+
+@component(
+    packages_to_install=['pandas', 'scikit-learn', 'numpy'],
+    base_image='python:3.9'
+)
+def evaluate_model(
+    model_input: Input[Model],
+    test_input: Input[Dataset],
+    metrics_output: Output[Metrics]
+):
+    """Evaluate model on test data."""
+    import pandas as pd
+    import pickle
+    from sklearn.metrics import classification_report, confusion_matrix
+    import numpy as np
+    
+    # Load test data
+    test_data = pd.read_csv(test_input.path)
+    X_test = test_data.drop('target', axis=1)
+    y_test = test_data['target']
+    
+    # Load model
+    with open(model_input.path, 'rb') as f:
+        model = pickle.load(f)
+    
+    # Make predictions
+    y_pred = model.predict(X_test)
+    
+    # Calculate metrics
+    test_accuracy = float(model.score(X_test, y_test))
+    conf_matrix = confusion_matrix(y_test, y_pred).tolist()
+    
+    # Log metrics
+    metrics = {
+        'test_accuracy': test_accuracy,
+        'confusion_matrix': conf_matrix
+    }
+    metrics_output.log_metrics(metrics)
+    
+    print(f"Test accuracy: {test_accuracy:.4f}")
+    print("\nClassification Report:")
+    print(classification_report(y_test, y_pred))
+
+# Define pipeline
+@dsl.pipeline(
+    name='rf-local-pipeline',
+    description='Local Random Forest training pipeline'
+)
+def rf_pipeline():
+    # Load data
+    load_task = load_data()
+    
+    # Preprocess data
+    preprocess_task = preprocess_data(
+        data_input=load_task.outputs['data_output']
+    )
+    
+    # Train model
+    train_task = train_model(
+        train_input=preprocess_task.outputs['train_output']
+    )
+    
+    # Evaluate model
+    evaluate_task = evaluate_model(
+        model_input=train_task.outputs['model_output'],
+        test_input=preprocess_task.outputs['test_output']
+    )
+
+def run_pipeline():
+    # Create temporary directory for pipeline artifacts
+    temp_dir = tempfile.mkdtemp()
+    pipeline_path = os.path.join(temp_dir, 'pipeline.json')
+    
+    try:
+        # Compile pipeline
+        print("Compiling pipeline...")
+        compiler.Compiler().compile(
+            pipeline_func=rf_pipeline,
+            package_path=pipeline_path
+        )
+        
+        # Initialize local client
+        print("Initializing local client...")
+        client = LocalClient()
+        
+        # Create and execute run
+        print("Executing pipeline...")
+        run = client.create_run_from_pipeline_package(
+            package_path=pipeline_path,
+            arguments={}
+        )
+        
+        # Wait for pipeline completion
+        print("Waiting for pipeline to complete...")
+        client.wait_for_run_completion(run.run_id, timeout=1800)
+        
+        print("\nPipeline executed successfully!")
+        
+    except Exception as e:
+        print(f"Error executing pipeline: {str(e)}")
+        raise
+    finally:
+        # Cleanup
+        if os.path.exists(pipeline_path):
+            os.remove(pipeline_path)
+        os.rmdir(temp_dir)
+
+if __name__ == "__main__":
+    run_pipeline()
