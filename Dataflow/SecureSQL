@@ -1,0 +1,78 @@
+<dependencies>
+    <!-- Cloud SQL Socket Factory -->
+    <dependency>
+        <groupId>com.google.cloud.sql</groupId>
+        <artifactId>mysql-socket-factory</artifactId>
+        <version>1.13.0</version>
+    </dependency>
+    <!-- For PostgreSQL -->
+    <dependency>
+        <groupId>com.google.cloud.sql</groupId>
+        <artifactId>postgres-socket-factory</artifactId>
+        <version>1.13.0</version>
+    </dependency>
+    
+    <!-- Recommended Connection Pooling -->
+    <dependency>
+        <groupId>com.zaxxer</groupId>
+        <artifactId>HikariCP</artifactId>
+        <version>5.0.1</version>
+    </dependency>
+</dependencies>
+
+public class CloudSqlConnection {
+    public static Connection getConnection(CloudSqlConfig config) throws SQLException {
+        // Configure Socket Factory Connection
+        Properties properties = new Properties();
+        properties.setProperty("socketFactory", "com.google.cloud.sql.postgres.SocketFactory");
+        properties.setProperty("cloudSqlInstance", config.getInstanceConnectionName());
+        properties.setProperty("user", config.getUsername());
+        properties.setProperty("password", config.getPassword());
+
+        // SSL Configuration
+        properties.setProperty("ssl", "true");
+        properties.setProperty("sslmode", "verify-full");
+
+        // Connection URL for Private IP
+        String jdbcUrl = String.format(
+            "jdbc:postgresql://%s/%s?socketFactory=com.google.cloud.sql.postgres.SocketFactory&cloudSqlInstance=%s", 
+            config.getPrivateIp(), 
+            config.getDatabaseName(), 
+            config.getInstanceConnectionName()
+        );
+
+        return DriverManager.getConnection(jdbcUrl, properties);
+    }
+
+    // Connection Pooling with HikariCP
+    public static DataSource createConnectionPool(CloudSqlConfig config) {
+        HikariConfig hikariConfig = new HikariConfig();
+        hikariConfig.setJdbcUrl(/* Private IP JDBC URL */);
+        hikariConfig.setUsername(config.getUsername());
+        hikariConfig.setPassword(config.getPassword());
+        
+        // VPC Service Control Configuration
+        hikariConfig.addDataSourceProperty("socketFactory", "com.google.cloud.sql.postgres.SocketFactory");
+        hikariConfig.addDataSourceProperty("cloudSqlInstance", config.getInstanceConnectionName());
+        
+        // Connection Pool Tuning
+        hikariConfig.setMaximumPoolSize(10);
+        hikariConfig.setMinimumIdle(5);
+        hikariConfig.setConnectionTimeout(30000);
+        hikariConfig.setIdleTimeout(600000);
+        hikariConfig.setMaxLifetime(1800000);
+
+        return new HikariDataSource(hikariConfig);
+    }
+
+    // Configuration Class
+    public static class CloudSqlConfig {
+        private String instanceConnectionName;
+        private String privateIp;
+        private String username;
+        private String password;
+        private String databaseName;
+
+        // Getters and setters
+    }
+}
